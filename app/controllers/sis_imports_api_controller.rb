@@ -574,6 +574,16 @@ class SisImportsApiController < ApplicationController
   #   If set with diffing, diffing will not be performed if the number of rows
   #   to be run in the fully calculated diff import exceeds the threshold.
   #
+  # @argument checksum[algorithm] [String, "md5"|"sha1"|"sha256"|"sha384"|"sha512"]
+  #   If set with checksum[digest], the uploaded file will not be processed unless
+  #   the digest of the file computed using checksum[algorithm] matches the value
+  #   given by checksum[digest]
+  #
+  # @argument checksum[digest] [String]
+  #   If set with checksum[algorithm], the uploaded file will not be processed unless
+  #   the digest of the file computed using checksum[algorithm] matches the value
+  #   given by checksum[digest]. The digest is expected to be hex encoded.
+  #
   # @returns SisImport
   def create
     if authorized_action(@account, @current_user, :import_sis)
@@ -625,6 +635,32 @@ class SisImportsApiController < ApplicationController
                                    "text/csv" => "csv" }[request2.media_type] || "zip"
           file_obj.set_file_attributes("sis_import.#{params[:extension]}",
                                        request2.media_type)
+        end
+      end
+
+      if params[:checksum].present?
+        checksum = params.delete(:checksum)
+        read_chunk_size = 100 * 1024
+
+        # TODO: probably want to do something better than this check
+        unless checksum[:algorithm].is_a?(String) && checksum[:digest].is_a?(String)
+          return render json: { message: "Checksum included, but algorithm or digest is not a String." }, status: :bad_request
+        end
+
+        # TODO: also make this check better
+        checksum[:algorithm].strip!
+        checksum[:algorithm].downcase!
+        unless %w[md5 sha1 sha256 sha384 sha512].include? checksum[:algorithm]
+          return render json: { message: "Checksum included, but algorithm is not valid." }, status: :bad_request
+        end
+
+        digest = OpenSSL::Digest.new(checksum[:algorithm])
+        while block = file_obj.read(read_chunk_size) do
+          digest << block
+        end
+
+        unless digest.hexdigest.to_i(16) == checksum[:digest].to_i(16)
+          return render json: { message: "Checksum included, but digest provided (#{checksum[:digest]}) does not match digest calculated (#{digest.hexdigest}) using #{checksum[:algorithm]}." }, status: :bad_request
         end
       end
 
